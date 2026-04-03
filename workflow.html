@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pix Diff — Full System Workflow</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #172b4d; padding: 40px 24px 60px; }
+
+    h1 { text-align: center; font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { text-align: center; font-size: .82rem; color: #6b778c; margin-bottom: 48px; }
+
+    .diagram { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: 0; }
+
+    /* ── Step node ── */
+    .step {
+      width: 100%;
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      position: relative;
+    }
+
+    .step-num-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 44px;
+      flex-shrink: 0;
+    }
+    .step-circle {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .8rem; font-weight: 700; color: #fff;
+      flex-shrink: 0; z-index: 1;
+    }
+    .step-line { width: 2px; flex: 1; background: #dfe1e6; margin-top: 0; }
+
+    .step-body {
+      flex: 1;
+      padding: 0 0 28px 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      border: 1.5px solid #dfe1e6;
+      overflow: hidden;
+      box-shadow: 0 1px 4px rgba(0,0,0,.07);
+    }
+    .card-head {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px;
+    }
+    .card-head .icon { font-size: 1.3rem; flex-shrink: 0; }
+    .card-head .info { flex: 1; }
+    .card-head .title { font-size: .88rem; font-weight: 700; line-height: 1.2; }
+    .card-head .sub   { font-size: .75rem; color: #6b778c; margin-top: 2px; }
+    .card-head .tag {
+      font-size: .68rem; font-weight: 700; padding: 3px 9px;
+      border-radius: 10px; white-space: nowrap; flex-shrink: 0;
+    }
+
+    .card-body { padding: 0 16px 14px; border-top: 1px solid #f4f5f7; padding-top: 10px; }
+    .card-body p { font-size: .78rem; color: #42526e; line-height: 1.6; }
+
+    /* details list */
+    .detail-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .detail-item { display: flex; align-items: flex-start; gap: 8px; font-size: .76rem; color: #42526e; }
+    .detail-item .dot { width: 6px; height: 6px; border-radius: 50%; background: #97a0af; flex-shrink: 0; margin-top: 5px; }
+
+    /* branch ─ decision diamond */
+    .decision {
+      background: #fffae6;
+      border: 1.5px solid #ffe380;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: .78rem;
+      color: #172b4d;
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .decision .d-icon { font-size: 1.1rem; flex-shrink: 0; }
+    .decision .d-text .q { font-weight: 700; }
+    .decision .d-text .branches { display: flex; gap: 12px; margin-top: 4px; }
+    .decision .d-text .branch { padding: 2px 10px; border-radius: 10px; font-size: .72rem; font-weight: 600; }
+    .branch.yes { background: #e3fcef; color: #00875a; }
+    .branch.no  { background: #ffebe6; color: #de350b; }
+
+    /* code pill */
+    .code { font-family: 'SF Mono', 'Menlo', monospace; background: #f4f5f7; padding: 2px 7px; border-radius: 4px; font-size: .72rem; color: #6554c0; }
+
+    /* colour theme per step */
+    .c-figma   { background: #1e1e1e; }
+    .c-check   { background: #ff8b00; }
+    .c-size    { background: #0065ff; }
+    .c-fetch   { background: #00875a; }
+    .c-diff    { background: #6554c0; }
+    .c-report  { background: #de350b; }
+    .c-slack   { background: #4a154b; }
+
+    .border-figma  { border-color: #1e1e1e; }
+    .border-check  { border-color: #ff8b00; }
+    .border-size   { border-color: #0065ff; }
+    .border-fetch  { border-color: #00875a; }
+    .border-diff   { border-color: #6554c0; }
+    .border-report { border-color: #de350b; }
+    .border-slack  { border-color: #4a154b; }
+
+    .tag-figma  { background: #f4f5f7; color: #172b4d; }
+    .tag-n8n    { background: #e6f0ff; color: #0052cc; }
+    .tag-server { background: #e3fcef; color: #00875a; }
+    .tag-ext    { background: #f3f0ff; color: #6554c0; }
+
+    /* server endpoint badge */
+    .endpoint {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #f4f5f7; border: 1px solid #dfe1e6;
+      border-radius: 6px; padding: 5px 12px; margin-top: 8px;
+      font-size: .74rem;
+    }
+    .endpoint .method { font-weight: 700; color: #0052cc; font-family: monospace; }
+    .endpoint .path   { font-family: monospace; color: #172b4d; }
+    .endpoint .note   { color: #6b778c; font-size: .7rem; margin-left: 4px; }
+
+    /* last step no line */
+    .step:last-child .step-line { display: none; }
+  </style>
+</head>
+<body>
+
+<h1>⚡ Pix Diff — n8n Automation Workflow</h1>
+<p class="subtitle">End-to-end flow from Figma version check → pixel diff → Slack notification</p>
+
+<div class="diagram">
+
+  <!-- ── STEP 1: Version History ── -->
+  <div class="step">
+    <div class="step-num-col">
+      <div class="step-circle c-figma">1</div>
+      <div class="step-line"></div>
+    </div>
+    <div class="step-body">
+      <div class="card border-figma">
+        <div class="card-head">
+          <div class="icon">🎨</div>
+          <div class="info">
+            <div class="title">Fetch Figma Version History</div>
+            <div class="sub">Figma REST API · triggered on schedule or webhook</div>
+          </div>
+          <div class="tag tag-n8n">n8n</div>
+        </div>
+        <div class="card-body">
+          <div class="detail-list">
+            <div class="detail-item"><div class="dot"></div>Call <span class="code">GET /v1/files/:file_id/versions</span> to get version list</div>
+            <div class="detail-item"><div class="dot"></div>Compare latest version ID against the last stored version ID</div>
+          </div>
+          <div class="decision">
+            <div class="d-icon">🔀</div>
+            <div class="d-text">
+              <div class="q">New version detected?</div>
+              <div class="branches">
+                <div class="branch yes">✅ Yes → continue</div>
+                <div class="branch no">🛑 No → stop workflow</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 2: Size Pre-check ── -->
+  <div class="step">
+    <div class="step-num-col">
+      <div class="step-circle c-size">2</div>
+      <div class="step-line"></div>
+    </div>
+    <div class="step-body">
+      <div class="card border-size">
+        <div class="card-head">
+          <div class="icon">📐</div>
+          <div class="info">
+            <div class="title">Size Pre-check</div>
+            <div class="sub">Quick dimension compare before heavy pixel diff</div>
+          </div>
+          <div class="tag tag-server">server</div>
+        </div>
+        <div class="card-body">
+          <div class="detail-list">
+            <div class="detail-item"><div class="dot"></div>n8n sends current image metadata (width, height) from Figma API response</div>
+            <div class="detail-item"><div class="dot"></div>Server compares against stored <span class="code">before.png</span> dimensions</div>
+            <div class="detail-item"><div class="dot"></div>Returns <span class="code">{ sizeChanged: bool, widthDiff, heightDiff }</span></div>
+          </div>
+          <div class="endpoint">
+            <span class="method">POST</span>
+            <span class="path">/api/size-check/:caseName</span>
+            <span class="note">lightweight, no image processing</span>
+          </div>
+          <div class="decision" style="margin-top:10px">
+            <div class="d-icon">🔀</div>
+            <div class="d-text">
+              <div class="q">Size changed significantly?</div>
+              <div class="branches">
+                <div class="branch yes">⚠️ Yes → flag as major, skip to report</div>
+                <div class="branch no">✅ No → continue to pixel diff</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 3: Fetch from Figma ── -->
+  <div class="step">
+    <div class="step-num-col">
+      <div class="step-circle c-fetch">3</div>
+      <div class="step-line"></div>
+    </div>
+    <div class="step-body">
+      <div class="card border-fetch">
+        <div class="card-head">
+          <div class="icon">⬇️</div>
+          <div class="info">
+            <div class="title">Fetch Newest Image from Figma</div>
+            <div class="sub">Download latest rendered PNG for each changed frame</div>
+          </div>
+          <div class="tag tag-n8n">n8n</div>
+        </div>
+        <div class="card-body">
+          <div class="detail-list">
+            <div class="detail-item"><div class="dot"></div>Call <span class="code">GET /v1/images/:file_id?ids=:node_ids&format=png</span></div>
+            <div class="detail-item"><div class="dot"></div>Download the returned image URL as binary</div>
+            <div class="detail-item"><div class="dot"></div>Send the image binary to the server as <span class="code">after.png</span> for the matching <span class="code">case_*</span> folder</div>
+          </div>
+          <div class="endpoint">
+            <span class="method">POST</span>
+            <span class="path">/api/update-after/:caseName</span>
+            <span class="note">saves new image as after.png</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 4: Pixel Diff ── -->
+  <div class="step">
+    <div class="step-num-col">
+      <div class="step-circle c-diff">4</div>
+      <div class="step-line"></div>
+    </div>
+    <div class="step-body">
+      <div class="card border-diff">
+        <div class="card-head">
+          <div class="icon">🔍</div>
+          <div class="info">
+            <div class="title">Run Pixel Diff</div>
+            <div class="sub">Full pixelmatch comparison on all updated cases</div>
+          </div>
+          <div class="tag tag-server">server</div>
+        </div>
+        <div class="card-body">
+          <div class="detail-list">
+            <div class="detail-item"><div class="dot"></div>pixelmatch compares RGBA pixel-by-pixel · threshold 0.1</div>
+            <div class="detail-item"><div class="dot"></div>Generates magenta diff overlay image</div>
+            <div class="detail-item"><div class="dot"></div>Returns <span class="code">percentage</span> + severity classification</div>
+          </div>
+          <div class="endpoint">
+            <span class="method">POST</span>
+            <span class="path">/api/scan</span>
+            <span class="note">or /api/scan/:caseName for single case</span>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <span style="padding:4px 12px;border-radius:12px;font-size:.73rem;font-weight:600;background:#ffebe6;color:#de350b">🔴 Major ≥5%</span>
+            <span style="padding:4px 12px;border-radius:12px;font-size:.73rem;font-weight:600;background:#fffae6;color:#ff8b00">🟡 Minor 0.1–5%</span>
+            <span style="padding:4px 12px;border-radius:12px;font-size:.73rem;font-weight:600;background:#e3fcef;color:#00875a">🟢 No Change &lt;0.1%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 5: Render Report ── -->
+  <div class="step">
+    <div class="step-num-col">
+      <div class="step-circle c-report">5</div>
+      <div class="step-line"></div>
+    </div>
+    <div class="step-body">
+      <div class="card border-report">
+        <div class="card-head">
+          <div class="icon">📊</div>
+          <div class="info">
+            <div class="title">Render HTML Report</div>
+            <div class="sub">Self-contained interactive report with all diff images</div>
+          </div>
+          <div class="tag tag-server">server</div>
+        </div>
+        <div class="card-body">
+          <div class="detail-list">
+            <div class="detail-item"><div class="dot"></div>Server builds <span class="code">report.html</span> with base64-embedded images (no external deps)</div>
+            <div class="detail-item"><div class="dot"></div>Filter by severity · tap images to open lightbox</div>
+            <div class="detail-item"><div class="dot"></div>n8n receives the HTML or a hosted URL to attach/link</div>
+          </div>
+          <div class="endpoint">
+            <span class="method">GET</span>
+            <span class="path">/api/report</span>
+            <span class="note">returns rendered HTML</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 6: Slack ── -->
+  <div class="step">
+    <div class="step-num-col">
+      <div class="step-circle c-slack">6</div>
+      <div class="step-line"></div>
+    </div>
+    <div class="step-body">
+      <div class="card border-slack">
+        <div class="card-head">
+          <div class="icon">💬</div>
+          <div class="info">
+            <div class="title">Send Slack Notification</div>
+            <div class="sub">n8n Slack node · summary + report link</div>
+          </div>
+          <div class="tag tag-n8n">n8n</div>
+        </div>
+        <div class="card-body">
+          <div class="detail-list">
+            <div class="detail-item"><div class="dot"></div>Message includes: total cases · 🔴 major count · 🟡 minor count · 🟢 no change count</div>
+            <div class="detail-item"><div class="dot"></div>Attach report URL or upload <span class="code">report.html</span> as file</div>
+            <div class="detail-item"><div class="dot"></div>Only send if at least one major or minor diff found (configurable in n8n IF node)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Server endpoints summary ── -->
+<div style="max-width:720px;margin:40px auto 0;background:#fff;border-radius:10px;border:1.5px solid #dfe1e6;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.07)">
+  <div style="padding:14px 20px;background:#f4f5f7;border-bottom:1px solid #dfe1e6;font-size:.8rem;font-weight:700;color:#172b4d">📡 Server API Endpoints (for n8n to call)</div>
+  <table style="width:100%;border-collapse:collapse;font-size:.78rem">
+    <thead>
+      <tr style="background:#f8f9fa">
+        <th style="padding:8px 16px;text-align:left;color:#6b778c;font-weight:600;border-bottom:1px solid #f0f0f0">Method</th>
+        <th style="padding:8px 16px;text-align:left;color:#6b778c;font-weight:600;border-bottom:1px solid #f0f0f0">Endpoint</th>
+        <th style="padding:8px 16px;text-align:left;color:#6b778c;font-weight:600;border-bottom:1px solid #f0f0f0">Purpose</th>
+        <th style="padding:8px 16px;text-align:left;color:#6b778c;font-weight:600;border-bottom:1px solid #f0f0f0">Step</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom:1px solid #f4f5f7">
+        <td style="padding:8px 16px"><span style="color:#0052cc;font-weight:700;font-family:monospace">POST</span></td>
+        <td style="padding:8px 16px;font-family:monospace;color:#172b4d">/api/size-check/:caseName</td>
+        <td style="padding:8px 16px;color:#42526e">Quick dimension compare</td>
+        <td style="padding:8px 16px"><span style="background:#e6f0ff;color:#0052cc;padding:2px 8px;border-radius:8px;font-size:.7rem;font-weight:600">2</span></td>
+      </tr>
+      <tr style="border-bottom:1px solid #f4f5f7">
+        <td style="padding:8px 16px"><span style="color:#0052cc;font-weight:700;font-family:monospace">POST</span></td>
+        <td style="padding:8px 16px;font-family:monospace;color:#172b4d">/api/update-after/:caseName</td>
+        <td style="padding:8px 16px;color:#42526e">Save new Figma image as after.png</td>
+        <td style="padding:8px 16px"><span style="background:#e3fcef;color:#00875a;padding:2px 8px;border-radius:8px;font-size:.7rem;font-weight:600">3</span></td>
+      </tr>
+      <tr style="border-bottom:1px solid #f4f5f7">
+        <td style="padding:8px 16px"><span style="color:#0052cc;font-weight:700;font-family:monospace">POST</span></td>
+        <td style="padding:8px 16px;font-family:monospace;color:#172b4d">/api/scan</td>
+        <td style="padding:8px 16px;color:#42526e">Full pixel diff all cases → JSON</td>
+        <td style="padding:8px 16px"><span style="background:#f3f0ff;color:#6554c0;padding:2px 8px;border-radius:8px;font-size:.7rem;font-weight:600">4</span></td>
+      </tr>
+      <tr>
+        <td style="padding:8px 16px"><span style="color:#00875a;font-weight:700;font-family:monospace">GET</span></td>
+        <td style="padding:8px 16px;font-family:monospace;color:#172b4d">/api/report</td>
+        <td style="padding:8px 16px;color:#42526e">Return rendered HTML report</td>
+        <td style="padding:8px 16px"><span style="background:#ffebe6;color:#de350b;padding:2px 8px;border-radius:8px;font-size:.7rem;font-weight:600">5</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>
