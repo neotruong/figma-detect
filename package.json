@@ -1,14 +1,13 @@
 {
   "name": "pix-diff",
   "version": "1.0.0",
-  "description": "Lightweight pixel diff tool — web UI + CLI batch mode",
+  "description": "Pixel diff API for baseline sync and report history",
   "main": "server.js",
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "start": "node server.js",
-    "batch": "node compare.js"
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
