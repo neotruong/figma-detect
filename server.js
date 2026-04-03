@@ -1,21 +1,13 @@
 const express    = require('express');
-const path       = require('path');
-const fs         = require('fs');
+const { put, head } = require('@vercel/blob');
 const { Jimp }   = require('jimp');
 const pixelmatch = require('pixelmatch');
 
-const app  = express();
-const PORT = process.env.PORT || 3000;
-
-const DATA_DIR      = path.join(process.cwd(), 'data');
-const BASELINE_PATH = path.join(DATA_DIR, 'baseline.png');
-const REPORTS_DIR   = path.join(DATA_DIR, 'reports');
-
+const app = express();
 app.use(express.json({ limit: '25mb' }));
-app.use('/reports', express.static(REPORTS_DIR)); // serve report.html files
 
-fs.mkdirSync(DATA_DIR,    { recursive: true });
-fs.mkdirSync(REPORTS_DIR, { recursive: true });
+const BASELINE_KEY = 'baseline.png';
+const TOKEN        = process.env.BLOB_READ_WRITE_TOKEN;
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 
@@ -27,12 +19,12 @@ function getSeverity(pct) {
 
 async function downloadImage(url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Image download failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
   return Buffer.from(await res.arrayBuffer());
 }
 
-function toDataUrl(buffer) {
-  return `data:image/png;base64,${buffer.toString('base64')}`;
+function toDataUrl(buf) {
+  return `data:image/png;base64,${buf.toString('base64')}`;
 }
 
 // ─── REPORT HTML ─────────────────────────────────────────────────────────────
@@ -51,7 +43,6 @@ function buildReport({ beforeBuffer, afterBuffer, diffBuffer, severity, percenta
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 32px; }
-    header { margin-bottom: 28px; }
     h1 { font-size: 22px; font-weight: 700; }
     .badge {
       display: inline-block; margin-left: 10px; padding: 3px 12px;
@@ -59,7 +50,7 @@ function buildReport({ beforeBuffer, afterBuffer, diffBuffer, severity, percenta
       background: ${color}; color: #fff;
     }
     .sub { margin-top: 6px; font-size: 13px; color: #94a3b8; }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 24px; }
     .card { background: #1e293b; border-radius: 12px; overflow: hidden; }
     .card-title {
       padding: 10px 16px; font-size: 11px; font-weight: 600;
@@ -69,10 +60,8 @@ function buildReport({ beforeBuffer, afterBuffer, diffBuffer, severity, percenta
   </style>
 </head>
 <body>
-  <header>
-    <h1>Design Diff Report <span class="badge">${severity.toUpperCase()}</span></h1>
-    <p class="sub">${percentage}% pixels changed &nbsp;·&nbsp; ${ts}</p>
-  </header>
+  <h1>Design Diff Report <span class="badge">${severity.toUpperCase()}</span></h1>
+  <p class="sub">${percentage}% pixels changed &nbsp;·&nbsp; ${ts}</p>
   <div class="grid">
     <div class="card">
       <div class="card-title">Before — Baseline</div>
@@ -127,25 +116,22 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-/*
-  POST /api/compare
-  Body : { imageUrl: "https://..." }
-
-  1. Download image from imageUrl
-  2. No baseline → save as baseline, return baseline_created
-  3. Has baseline → pixel diff → generate report.html → update baseline
-  4. Return { severity, percentage, reportUrl }
-*/
 app.post('/api/compare', async (req, res) => {
   try {
     const { imageUrl } = req.body;
     if (!imageUrl) return res.status(400).json({ error: 'Missing imageUrl in body' });
 
+    // Download newest image from Figma (sent by n8n)
     const newestBuffer = await downloadImage(imageUrl);
 
+    // Check if baseline exists in Vercel Blob
+    const baselineMeta = await head(BASELINE_KEY, { token: TOKEN }).catch(() => null);
+
     // First run — no baseline yet
-    if (!fs.existsSync(BASELINE_PATH)) {
-      fs.writeFileSync(BASELINE_PATH, newestBuffer);
+    if (!baselineMeta) {
+      await put(BASELINE_KEY, newestBuffer, {
+        access: 'public', token: TOKEN, allowOverwrite: true
+      });
       return res.status(201).json({
         status:      'baseline_created',
         severity:    'none',
@@ -155,31 +141,32 @@ app.post('/api/compare', async (req, res) => {
       });
     }
 
+    // Download baseline from Blob
+    const baselineRes  = await fetch(baselineMeta.url);
+    const beforeBuffer = Buffer.from(await baselineRes.arrayBuffer());
+
     // Compare
-    const beforeBuffer               = fs.readFileSync(BASELINE_PATH);
     const { percentage, diffBuffer } = await compare(beforeBuffer, newestBuffer);
-    const rounded                    = parseFloat(percentage.toFixed(2));
-    const severity                   = getSeverity(rounded);
+    const rounded  = parseFloat(percentage.toFixed(2));
+    const severity = getSeverity(rounded);
 
-    // Save self-contained report.html
-    const dateKey   = new Date().toISOString().slice(0, 10);       // e.g. 2026-04-03
-    const reportDir = path.join(REPORTS_DIR, dateKey);
-    fs.mkdirSync(reportDir, { recursive: true });
-
-    const fileName  = `${Date.now()}.html`;
+    // Upload self-contained report.html to Blob → get permanent public URL
+    const reportKey = `reports/${new Date().toISOString().slice(0, 10)}/${Date.now()}.html`;
     const html      = buildReport({ beforeBuffer, afterBuffer: newestBuffer, diffBuffer, severity, percentage: rounded });
-    fs.writeFileSync(path.join(reportDir, fileName), html);
+    const { url: reportUrl } = await put(reportKey, html, {
+      access: 'public', contentType: 'text/html', token: TOKEN
+    });
 
-    // Update baseline to newest
-    fs.writeFileSync(BASELINE_PATH, newestBuffer);
-
-    const reportUrl = `${req.protocol}://${req.get('host')}/reports/${dateKey}/${fileName}`;
+    // Update baseline to latest
+    await put(BASELINE_KEY, newestBuffer, {
+      access: 'public', token: TOKEN, allowOverwrite: true
+    });
 
     return res.json({
       status:      'ok',
       severity,
       percentage:  rounded,
-      reportUrl,
+      reportUrl,               // e.g. https://xxxx.public.blob.vercel-storage.com/reports/2026-04-03/xxx.html
       processedAt: new Date().toISOString()
     });
 
@@ -189,9 +176,5 @@ app.post('/api/compare', async (req, res) => {
   }
 });
 
-// ─── START ───────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`\nPix Diff → http://localhost:${PORT}`);
-  console.log(`Endpoint  → POST /api/compare  { imageUrl }`);
-  console.log(`Reports   → http://localhost:${PORT}/reports\n`);
-});
+// ─── EXPORT for Vercel (no app.listen) ───────────────────────────────────────
+module.exports = app;
