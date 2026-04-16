@@ -7,6 +7,7 @@ const app = express();
 app.use(express.json({ limit: '25mb' }));
 
 const BASELINE_KEY = 'baseline.png';
+const HISTORY_KEY  = 'history.json';
 const TOKEN        = process.env.BLOB_READ_WRITE_TOKEN;
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
@@ -125,6 +126,30 @@ async function compare(beforeBuffer, afterBuffer) {
   return { percentage, diffBuffer };
 }
 
+// ─── HISTORY ──────────────────────────────────────────────────────────────────
+
+async function getHistory() {
+  try {
+    const meta = await head(HISTORY_KEY, { token: TOKEN }).catch(() => null);
+    if (!meta) return [];
+    const res = await fetch(meta.url);
+    return await res.json();
+  } catch (err) {
+    console.warn('[getHistory] Failed to fetch history:', err.message);
+    return [];
+  }
+}
+
+async function saveHistory(history) {
+  try {
+    await put(HISTORY_KEY, JSON.stringify(history, null, 2), {
+      access: 'public', contentType: 'application/json', token: TOKEN
+    });
+  } catch (err) {
+    console.warn('[saveHistory] Failed to save history:', err.message);
+  }
+}
+
 // ─── ROUTES ──────────────────────────────────────────────────────────────────
 
 app.get('/health', (_req, res) => {
@@ -147,12 +172,24 @@ app.post('/api/compare', async (req, res) => {
       await put(BASELINE_KEY, newestBuffer, {
         access: 'public', token: TOKEN, allowOverwrite: true
       });
+      
+      const history = await getHistory();
+      const runData = {
+        timestamp: new Date().toISOString(),
+        percentage: 0,
+        reportUrl: null,
+        severity: 'none'
+      };
+      history.push(runData);
+      await saveHistory(history);
+      
       return res.status(201).json({
         status:      'baseline_created',
         severity:    'none',
         percentage:  0,
         reportUrl:   null,
-        processedAt: new Date().toISOString()
+        processedAt: new Date().toISOString(),
+        history
       });
     }
 
@@ -165,24 +202,41 @@ app.post('/api/compare', async (req, res) => {
     const rounded  = parseFloat(percentage.toFixed(2));
     const severity = getSeverity(rounded);
 
-    // Upload self-contained report.html to Blob → get permanent public URL
-    const reportKey = `reports/${new Date().toISOString().slice(0, 10)}/${Date.now()}.html`;
-    const html      = buildReport({ beforeBuffer, afterBuffer: newestBuffer, diffBuffer, severity, percentage: rounded });
-    const { url: reportUrl } = await put(reportKey, html, {
-      access: 'public', contentType: 'text/html', token: TOKEN
-    });
+    let reportUrl = null;
+
+    // Only generate report if there are changes
+    if (rounded > 0) {
+      const reportKey = `reports/${new Date().toISOString().slice(0, 10)}/${Date.now()}.html`;
+      const html      = buildReport({ beforeBuffer, afterBuffer: newestBuffer, diffBuffer, severity, percentage: rounded });
+      const report = await put(reportKey, html, {
+        access: 'public', contentType: 'text/html', token: TOKEN
+      });
+      reportUrl = report.url;
+    }
 
     // Update baseline to latest
     await put(BASELINE_KEY, newestBuffer, {
       access: 'public', token: TOKEN, allowOverwrite: true
     });
 
+    // Save run to history
+    const history = await getHistory();
+    const runData = {
+      timestamp: new Date().toISOString(),
+      percentage: rounded,
+      reportUrl: reportUrl || null,
+      severity
+    };
+    history.push(runData);
+    await saveHistory(history);
+
     return res.json({
       status:      'ok',
       severity,
       percentage:  rounded,
-      reportUrl,               // e.g. https://xxxx.public.blob.vercel-storage.com/reports/2026-04-03/xxx.html
-      processedAt: new Date().toISOString()
+      reportUrl,               // null if no changes, otherwise e.g. https://xxxx.public.blob.vercel-storage.com/reports/2026-04-03/xxx.html
+      processedAt: new Date().toISOString(),
+      history
     });
 
   } catch (err) {
