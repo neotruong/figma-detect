@@ -83,14 +83,24 @@ function buildReport({ beforeBuffer, afterBuffer, diffBuffer, severity, percenta
 // ─── CORE: pixel diff ────────────────────────────────────────────────────────
 
 async function compare(beforeBuffer, afterBuffer) {
-  const imgBefore = await Jimp.read(beforeBuffer);
-  const imgAfter  = await Jimp.read(afterBuffer);
+  const imgBefore = await new Promise((resolve, reject) => {
+    Jimp.read(beforeBuffer, (err, img) => {
+      if (err) reject(err);
+      else resolve(img);
+    });
+  });
+  const imgAfter = await new Promise((resolve, reject) => {
+    Jimp.read(afterBuffer, (err, img) => {
+      if (err) reject(err);
+      else resolve(img);
+    });
+  });
 
   const w = imgBefore.bitmap.width;
   const h = imgBefore.bitmap.height;
 
   if (imgAfter.bitmap.width !== w || imgAfter.bitmap.height !== h) {
-    imgAfter.resize({ w, h });
+    imgAfter.resize(w, h);
   }
 
   const diffData   = new Uint8Array(w * h * 4);
@@ -103,9 +113,14 @@ async function compare(beforeBuffer, afterBuffer) {
 
   const percentage = (diffPixels / (w * h)) * 100;
 
-  const diffImg = new Jimp({ width: w, height: h });
+  const diffImg = new Jimp(w, h);
   diffImg.bitmap.data = Buffer.from(diffData);
-  const diffBuffer = await diffImg.getBuffer('image/png');
+  const diffBuffer = await new Promise((resolve, reject) => {
+    diffImg.getBuffer('image/png', (err, buf) => {
+      if (err) reject(err);
+      else resolve(buf);
+    });
+  });
 
   return { percentage, diffBuffer };
 }
