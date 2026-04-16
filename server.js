@@ -1,6 +1,6 @@
 const express    = require('express');
 const { put, head } = require('@vercel/blob');
-const { Jimp }   = require('jimp');
+const Jimp       = require('jimp');
 const pixelmatch = require('pixelmatch');
 
 const app = express();
