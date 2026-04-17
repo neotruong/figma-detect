@@ -12,6 +12,16 @@ const TOKEN        = process.env.BLOB_READ_WRITE_TOKEN;
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 
+function getBaselineKey(screen = 'default') {
+  return screen === 'default' ? 'baseline.png' : `${screen}_baseline.png`;
+}
+
+function getHistoryKey(screen = 'default') {
+  return screen === 'default' ? 'history.json' : `${screen}_history.json`;
+}
+
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+
 function getSeverity(pct) {
   if (pct >= 5)   return 'major';
   if (pct >= 0.1) return 'minor';
@@ -128,9 +138,10 @@ async function compare(beforeBuffer, afterBuffer) {
 
 // ─── HISTORY ──────────────────────────────────────────────────────────────────
 
-async function getHistory() {
+async function getHistory(screen = 'default') {
   try {
-    const meta = await head(HISTORY_KEY, { token: TOKEN }).catch(() => null);
+    const historyKey = getHistoryKey(screen);
+    const meta = await head(historyKey, { token: TOKEN }).catch(() => null);
     if (!meta) return [];
     const res = await fetch(meta.url);
     return await res.json();
@@ -140,9 +151,10 @@ async function getHistory() {
   }
 }
 
-async function saveHistory(history) {
+async function saveHistory(history, screen = 'default') {
   try {
-    await put(HISTORY_KEY, JSON.stringify(history, null, 2), {
+    const historyKey = getHistoryKey(screen);
+    await put(historyKey, JSON.stringify(history, null, 2), {
       access: 'public', contentType: 'application/json', token: TOKEN
     });
   } catch (err) {
@@ -156,24 +168,54 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.get('/api/history', async (req, res) => {
+  try {
+    const { screen, baseline } = req.query;
+    
+    let screenName = screen || 'default';
+    if (baseline && !screen) {
+      screenName = baseline.replace(/_baseline\.png?$/, '') || 'default';
+    }
+    
+    const history = await getHistory(screenName);
+    return res.json({
+      screen: screenName,
+      history
+    });
+  } catch (err) {
+    console.error('[history]', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/compare', async (req, res) => {
   try {
-    const { imageUrl } = req.body;
+    const { imageUrl, screen, baseline } = req.body;
     if (!imageUrl) return res.status(400).json({ error: 'Missing imageUrl in body' });
+
+    // Support both 'screen' and 'baseline' parameters for backward compatibility
+    let screenName = screen || 'default';
+    if (baseline && !screen) {
+      // Extract screen name from baseline filename (e.g., "onboarding_baseline.png" -> "onboarding")
+      // Also handle cases with or without .png extension
+      screenName = baseline.replace(/_baseline\.png?$/, '') || 'default';
+    }
+
+    const baselineKey = getBaselineKey(screenName);
 
     // Download newest image from Figma (sent by n8n)
     const newestBuffer = await downloadImage(imageUrl);
 
     // Check if baseline exists in Vercel Blob
-    const baselineMeta = await head(BASELINE_KEY, { token: TOKEN }).catch(() => null);
+    const baselineMeta = await head(baselineKey, { token: TOKEN }).catch(() => null);
 
     // First run — no baseline yet
     if (!baselineMeta) {
-      await put(BASELINE_KEY, newestBuffer, {
+      await put(baselineKey, newestBuffer, {
         access: 'public', token: TOKEN, allowOverwrite: true
       });
       
-      const history = await getHistory();
+      const history = await getHistory(screenName);
       const runData = {
         timestamp: new Date().toISOString(),
         percentage: 0,
@@ -181,7 +223,7 @@ app.post('/api/compare', async (req, res) => {
         severity: 'none'
       };
       history.push(runData);
-      await saveHistory(history);
+      await saveHistory(history, screenName);
       
       return res.status(201).json({
         status:      'baseline_created',
@@ -189,7 +231,8 @@ app.post('/api/compare', async (req, res) => {
         percentage:  0,
         reportUrl:   null,
         processedAt: new Date().toISOString(),
-        history
+        screen:      screenName,
+        baselineFile: getBaselineKey(screenName)
       });
     }
 
@@ -206,7 +249,7 @@ app.post('/api/compare', async (req, res) => {
 
     // Only generate report if there are changes
     if (rounded > 0) {
-      const reportKey = `reports/${new Date().toISOString().slice(0, 10)}/${Date.now()}.html`;
+      const reportKey = `reports/${screenName}/${new Date().toISOString().slice(0, 10)}/${Date.now()}.html`;
       const html      = buildReport({ beforeBuffer, afterBuffer: newestBuffer, diffBuffer, severity, percentage: rounded });
       const report = await put(reportKey, html, {
         access: 'public', contentType: 'text/html', token: TOKEN
@@ -215,12 +258,12 @@ app.post('/api/compare', async (req, res) => {
     }
 
     // Update baseline to latest
-    await put(BASELINE_KEY, newestBuffer, {
+    await put(baselineKey, newestBuffer, {
       access: 'public', token: TOKEN, allowOverwrite: true
     });
 
     // Save run to history
-    const history = await getHistory();
+    const history = await getHistory(screenName);
     const runData = {
       timestamp: new Date().toISOString(),
       percentage: rounded,
@@ -228,7 +271,7 @@ app.post('/api/compare', async (req, res) => {
       severity
     };
     history.push(runData);
-    await saveHistory(history);
+    await saveHistory(history, screenName);
 
     return res.json({
       status:      'ok',
@@ -236,7 +279,8 @@ app.post('/api/compare', async (req, res) => {
       percentage:  rounded,
       reportUrl,               // null if no changes, otherwise e.g. https://xxxx.public.blob.vercel-storage.com/reports/2026-04-03/xxx.html
       processedAt: new Date().toISOString(),
-      history
+      screen:      screenName,
+      baselineFile: getBaselineKey(screenName)
     });
 
   } catch (err) {
